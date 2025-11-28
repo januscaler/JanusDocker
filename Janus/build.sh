@@ -29,6 +29,7 @@ for PLATFORM in "${PLATFORMS[@]}"; do
         # For Linux builds
         docker buildx build --platform "$PLATFORM" \
             --push \
+            --build-arg architecture=darwin-arm64 \
             --build-arg PLATFORM="$PLATFORM" \
             --build-arg UBUNTU_VERSION=24.04 \
             -t "$IMAGE_NAME:$TAG" .

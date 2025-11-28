@@ -2,14 +2,14 @@
 
 # Create and set up the buildx builder
 docker buildx create --name multi-arch \
-  --platform "linux/arm64,linux/amd64,linux/arm/v7,windows/amd64" \
+  --platform "linux/arm64,linux/arm64/v8,linux/amd64,linux/arm/v7,windows/amd64" \
   --driver "docker-container" --use
 
 # Define image name
 IMAGE_NAME="shivanshtalwar0/januscoredeps"
 
 # Define platforms
-PLATFORMS=("linux/amd64" "linux/arm/v7")
+PLATFORMS=("linux/arm64/v8" "linux/arm64" "linux/arm/v7" "linux/amd64"  "windows/amd64")
 
 # Loop through each platform and build the image
 for PLATFORM in "${PLATFORMS[@]}"; do
