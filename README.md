@@ -15,6 +15,13 @@ or can build your own if you got lot of time in this world. by using [JanusCoreD
     cd Janus
     docker-compose up -d # note option -d to start it in detached mode
 
+
+## Build Alpine Image
+
+```bash
+    cd JanusCoreDeps
+    ./build-alpine.sh
+```
 # Build
 
     cd Janus
