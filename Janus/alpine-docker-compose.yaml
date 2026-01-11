@@ -1,0 +1,7 @@
+version: "3.9"  # optional since v1.27.0
+services:
+  janus-multistreaming:
+    build:
+      context: .
+      dockerfile: ./alpine.Dockerfile
+    network_mode: host
