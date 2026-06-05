@@ -4,43 +4,31 @@ FROM --platform=${PLATFORM} alpine:3.20
 LABEL maintainer="shivansh talwar <shivanshtalwar0@gmail.com>"
 LABEL description="Janus Gateway dependencies on Alpine 3.20"
 
-ENV BUILD_DEPS="\
+ENV BUILD_DEPS=" \
     build-base \
     autoconf automake libtool \
-    cmake ninja \
+    cmake ninja meson \
     linux-headers \
-    bash curl wget git unzip zip \
+    bash curl wget git unzip zip ca-certificates \
     pkgconfig \
     openssl-dev \
     jansson-dev \
-    glib-dev \
-    glib-static \
+    glib-dev glib-static \
     libffi-dev \
     libmicrohttpd-dev \
     libogg-dev \
     opus-dev \
-    cmake \
     flex bison \
-    lua5.3-dev \
+    lua-dev \
     python3 python3-dev py3-pip py3-setuptools py3-wheel \
-    ffmpeg-libs \
-    ffmpeg \
+    ffmpeg-libs ffmpeg ffmpeg-dev \
     zlib-dev \
     gnutls-dev \
-    graphviz \
-    glib-dev \
-    libconfig-dev \
-    libconfig-static \
-    jansson-dev \
-    cmake \
-    meson \
-    ninja \
-    openssl-dev \
-    libnice-dev \
-    openssl-dev \
-    zlib-dev \
-    ffmpeg-dev \
-"
+    graphviz doxygen \
+    libconfig-dev libconfig-static \
+    nanomsg-dev \
+    duktape-dev \
+    curl-dev"
 
 RUN apk update && apk upgrade && \
     apk add --no-cache $BUILD_DEPS
@@ -50,16 +38,18 @@ WORKDIR /builds
 ############################################
 # Build: paho.mqtt.c
 ############################################
-RUN git -c http.sslVerify=False clone https://github.com/eclipse/paho.mqtt.c.git && \
+# Note: Using CMake as it is the officially supported build system for Paho C, 
+# ensuring correct installation to /usr for Alpine's musl libc.
+RUN git clone https://github.com/eclipse/paho.mqtt.c.git && \
     cd paho.mqtt.c && \
-    cmake -Bbuild -H. -DPAHO_BUILD_SHARED=TRUE -DPAHO_WITH_SSL=TRUE && \
-    cmake --build build/ --target install && \
+    cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DPAHO_BUILD_SHARED=TRUE -DPAHO_WITH_SSL=TRUE && \
+    cmake --build build --target install && \
     cd .. && rm -rf paho.mqtt.c
 
 ############################################
-# Build: rabbitmq-c (requires gnutls on Alpine)
+# Build: rabbitmq-c
 ############################################
-RUN git -c http.sslVerify=False clone https://github.com/alanxz/rabbitmq-c && \
+RUN git clone https://github.com/alanxz/rabbitmq-c && \
     cd rabbitmq-c && \
     git submodule init && git submodule update && \
     mkdir build && cd build && \
@@ -70,7 +60,9 @@ RUN git -c http.sslVerify=False clone https://github.com/alanxz/rabbitmq-c && \
 ############################################
 # Build: libnice
 ############################################
-RUN git -c http.sslVerify=False clone https://gitlab.freedesktop.org/libnice/libnice && \
+# Note: libnice-dev is intentionally excluded from BUILD_DEPS to prevent 
+# conflicts with the master branch compilation as per Janus README.
+RUN git clone https://gitlab.freedesktop.org/libnice/libnice && \
     cd libnice && \
     meson setup build --prefix=/usr && \
     ninja -C build && ninja -C build install && \
@@ -79,6 +71,7 @@ RUN git -c http.sslVerify=False clone https://gitlab.freedesktop.org/libnice/lib
 ############################################
 # Build: libsrtp
 ############################################
+# Note: --enable-openssl is strictly required by Janus for AES-GCM support.
 RUN wget https://github.com/cisco/libsrtp/archive/v2.2.0.tar.gz && \
     tar xfv v2.2.0.tar.gz && \
     cd libsrtp-2.2.0 && \
@@ -89,60 +82,51 @@ RUN wget https://github.com/cisco/libsrtp/archive/v2.2.0.tar.gz && \
 ############################################
 # Build: usrsctp
 ############################################
-RUN git -c http.sslVerify=False clone https://github.com/sctplab/usrsctp && \
+RUN git clone https://github.com/sctplab/usrsctp && \
     cd usrsctp && \
     ./bootstrap && \
-    ./configure --prefix=/usr && \
+    ./configure --prefix=/usr --disable-programs --disable-inet --disable-inet6 && \
     make && make install && \
     cd .. && rm -rf usrsctp
 
 ############################################
 # Build: libwebsockets
 ############################################
-RUN wget https://github.com/warmcat/libwebsockets/archive/refs/tags/v4.3.3.zip && \
-    unzip v4.3.3.zip && \
-    cd libwebsockets-4.3.3 && \
+# Note: Cloning and checking out v4.3-stable as explicitly recommended by the Janus README.
+RUN git clone https://github.com/warmcat/libwebsockets.git && \
+    cd libwebsockets && \
+    git checkout v4.3-stable && \
     mkdir build && cd build && \
     cmake -DLWS_MAX_SMP=1 \
           -DLWS_WITHOUT_EXTENSIONS=0 \
           -DCMAKE_INSTALL_PREFIX=/usr \
           -DCMAKE_C_FLAGS="-fPIC" .. && \
     make && make install && \
-    cd ../.. && rm -rf libwebsockets-4.3.3 v4.3.3.zip
+    cd ../.. && rm -rf libwebsockets
 
 ############################################
-# Build: libogg 1.3.5 (already installed, but building source anyway)
+# Build: sofia-sip
 ############################################
-RUN wget https://downloads.xiph.org/releases/ogg/libogg-1.3.5.zip && \
-    unzip libogg-1.3.5.zip && \
-    cd libogg-1.3.5 && \
-    ./configure && make && make install && \
-    cd .. && rm -rf libogg-1.3.5 libogg-1.3.5.zip
-
-############################################
-# Build: sofia-sip 1.13.2
-############################################
-RUN git -c http.sslVerify=False clone https://github.com/freeswitch/sofia-sip.git && \
+RUN git clone https://github.com/freeswitch/sofia-sip.git && \
     cd sofia-sip && \
     git checkout v1.13.2 && \
     sh autogen.sh && \
-    ./configure && \
+    ./configure --prefix=/usr && \
     make && make install && \
     cd .. && rm -rf sofia-sip
 
-       
 ############################################
-# Build: Janus Gateway 1.2.4
+# Build: Janus Gateway 1.4.1
 ############################################
-RUN wget https://github.com/meetecho/janus-gateway/archive/refs/tags/v1.3.3.zip && \
-    unzip v1.3.3.zip && \
-    cd janus-gateway-1.3.3 && \
+# Note: Autodetects installed dependencies. 'make configs' is required per README 
+# to generate the default .jcfg files.
+RUN wget https://github.com/meetecho/janus-gateway/archive/refs/tags/v1.4.1.zip && \
+    unzip v1.4.1.zip && \
+    cd janus-gateway-1.4.1 && \
     sh autogen.sh && \
-    ./configure --prefix=/opt/janus-tools \
-                --enable-post-processing \
-                --enable-all-plugins \
-                --enable-all-transports && \
+    ./configure --prefix=/opt/janus && \
     make && make install && \
-    cd .. && rm -rf janus-gateway-1.3.3 v1.3.3.zip
+    make configs && \
+    cd .. && rm -rf janus-gateway-1.4.1 v1.4.1.zip
 
-ENV PATH="/opt/janus-tools/bin:${PATH}"
+ENV PATH="/opt/janus/bin:${PATH}"
