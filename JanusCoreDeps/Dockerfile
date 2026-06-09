@@ -4,8 +4,10 @@ FROM --platform=${PLATFORM} alpine:3.20
 LABEL maintainer="shivansh talwar <shivanshtalwar0@gmail.com>"
 LABEL description="Provides an Alpine image with Janus Gateway dependencies"
 
-# ── System packages ──────────────────────────────────────────────────────────
-# Mapped from Ubuntu apt packages to Alpine apk packages
+# ── System packages (Janus required + optional deps via apk) ─────────────────
+# Required: GLib, zlib, pkg-config, Jansson, libconfig, OpenSSL, libmicrohttpd,
+#           nanomsg, libcurl, libopus, Lua, Duktape
+# Optional plugin deps covered here: libogg (also built from source below), opus
 ENV BUILD_DEPS=" \
     build-base \
     autoconf automake libtool \
@@ -18,10 +20,10 @@ ENV BUILD_DEPS=" \
     glib-dev glib-static \
     libffi-dev \
     libmicrohttpd-dev \
-    libogg-dev \
     opus-dev \
     flex bison \
     lua-dev \
+    duktape-dev \
     python3 python3-dev py3-pip py3-setuptools py3-wheel \
     ffmpeg ffmpeg-dev ffmpeg-libs \
     zlib-dev \
@@ -38,51 +40,54 @@ RUN apk update && apk upgrade && \
 # Build workspace
 RUN mkdir -p /builds
 
-# ── paho.mqtt.c (latest master) ──────────────────────────────────────────────
-# Note: Switched from `make` to `cmake`. Upstream requires CMake to properly 
-# build shared libraries and link OpenSSL for Janus MQTT event handlers.
+# ── paho.mqtt.c (latest — Janus README: clone latest for MQTT support) ───────
+# CMake + PAHO_HIGH_PERFORMANCE avoids musl/Alpine Heap.h free() macro conflict.
 RUN cd /builds && \
-    git clone https://github.com/eclipse/paho.mqtt.c.git && \
+    git clone --depth 1 https://github.com/eclipse-paho/paho.mqtt.c.git && \
     cd paho.mqtt.c && \
-    cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DPAHO_BUILD_SHARED=TRUE -DPAHO_WITH_SSL=TRUE && \
+    cmake -B build -S . \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DPAHO_BUILD_SHARED=TRUE \
+        -DPAHO_WITH_SSL=TRUE \
+        -DPAHO_HIGH_PERFORMANCE=TRUE \
+        -DPAHO_ENABLE_TESTING=FALSE && \
     cmake --build build --target install && \
     rm -rf /builds/paho.mqtt.c
 
-# ── rabbitmq-c (latest master — Janus README recommends latest) ──────────────
+# ── rabbitmq-c (latest master — Janus README recommends latest from git) ─────
 RUN cd /builds && \
-    git clone https://github.com/alanxz/rabbitmq-c && \
+    git clone --depth 1 https://github.com/alanxz/rabbitmq-c && \
     cd rabbitmq-c && \
     git submodule init && \
     git submodule update && \
-    mkdir build && cd build && \
-    cmake -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_SHARED_LIBS=ON .. && \
-    make && make install && \
+    cmake -B build -S . \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_SHARED_LIBS=ON && \
+    cmake --build build --target install && \
     rm -rf /builds/rabbitmq-c
 
-# ── libnice (always build master — distro package is known broken) ────────────
-# Janus README: "we always recommend manually compiling the master version"
-# Note: libnice-dev is intentionally excluded from BUILD_DEPS to prevent conflicts.
+# ── libnice (master — Janus README: always compile master, distro pkgs broken) 
+# libnice-dev is intentionally excluded from BUILD_DEPS to prevent conflicts.
 RUN cd /builds && \
-    git clone https://gitlab.freedesktop.org/libnice/libnice && \
+    git clone --depth 1 https://gitlab.freedesktop.org/libnice/libnice && \
     cd libnice && \
     meson setup build --prefix=/usr && \
     ninja -C build && \
     ninja -C build install && \
     rm -rf /builds/libnice
 
-# ── libsrtp 2.5.0 (latest stable, fixes several CVEs) ────────────────────────
+# ── libsrtp v2.8.0 (Janus README: 2.x recommended, --enable-openssl required) 
 RUN cd /builds && \
-    wget https://github.com/cisco/libsrtp/archive/v2.5.0.tar.gz && \
-    tar xfv v2.5.0.tar.gz && \
-    cd libsrtp-2.5.0 && \
+    wget https://github.com/cisco/libsrtp/archive/v2.8.0.tar.gz && \
+    tar xfv v2.8.0.tar.gz && \
+    cd libsrtp-2.8.0 && \
     ./configure --prefix=/usr --enable-openssl && \
     make shared_library && make install && \
-    rm -rf /builds/v2.5.0.tar.gz /builds/libsrtp-2.5.0
+    rm -rf /builds/v2.8.0.tar.gz /builds/libsrtp-2.8.0
 
-# ── usrsctp (latest master — added recommended flags per upstream README) ──────
-# --disable-programs --disable-inet --disable-inet6 reduce attack surface
+# ── usrsctp (latest master — Janus README recommended configure flags) ───────
 RUN cd /builds && \
-    git clone https://github.com/sctplab/usrsctp && \
+    git clone --depth 1 https://github.com/sctplab/usrsctp && \
     cd usrsctp && \
     ./bootstrap && \
     ./configure --prefix=/usr \
@@ -92,35 +97,32 @@ RUN cd /builds && \
     make && make install && \
     rm -rf /builds/usrsctp
 
-# ── libwebsockets v4.3-stable ────────────────────────────────────────────────
+# ── libwebsockets v4.3-stable (Janus README recommended stable branch) ──────
 RUN cd /builds && \
     git clone --branch v4.3-stable --depth 1 \
         https://github.com/warmcat/libwebsockets.git && \
     cd libwebsockets && \
-    mkdir build && cd build && \
-    cmake \
+    cmake -B build -S . \
         -DLWS_MAX_SMP=1 \
         -DLWS_WITHOUT_EXTENSIONS=0 \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        -DCMAKE_C_FLAGS="-fPIC" .. && \
-    make && make install && \
+        -DCMAKE_C_FLAGS="-fpic" && \
+    cmake --build build --target install && \
     rm -rf /builds/libwebsockets
 
-# ── libogg 1.3.5 (unchanged — still latest stable) ───────────────────────────
-# Note: Added --prefix=/usr. Alpine's musl libc does not search /usr/local/lib 
-# by default, which causes silent runtime linking failures.
+# ── libogg v1.3.6 (latest stable — needed for post-processing / recordings) ─
 RUN cd /builds && \
-    wget https://downloads.xiph.org/releases/ogg/libogg-1.3.5.zip && \
-    unzip libogg-1.3.5.zip && \
-    cd libogg-1.3.5 && \
+    wget https://github.com/xiph/ogg/releases/download/v1.3.6/libogg-1.3.6.tar.gz && \
+    tar xfv libogg-1.3.6.tar.gz && \
+    cd libogg-1.3.6 && \
     ./configure --prefix=/usr && make && make install && \
-    rm -rf /builds/libogg-1.3.5.zip /builds/libogg-1.3.5
+    rm -rf /builds/libogg-1.3.6.tar.gz /builds/libogg-1.3.6
 
-# ── sofia-sip v1.13.17 (many SIP plugin fixes upstream) ──────────────────────
+# ── sofia-sip v1.13.17 (latest — Janus SIP plugin dependency) ────────────────
 RUN cd /builds && \
-    git clone https://github.com/freeswitch/sofia-sip.git && \
+    git clone --depth 1 --branch v1.13.17 \
+        https://github.com/freeswitch/sofia-sip.git && \
     cd sofia-sip && \
-    git checkout v1.13.17 && \
     sh autogen.sh && \
     ./configure --prefix=/usr && \
     make && make install && \
